@@ -50,7 +50,7 @@ jobs:
 
       - name: Run tests
         run: |
-          bundle exec rails test -f
+          bundle exec rails test
 
       - name: Extract coverage percentage
         if: always()
