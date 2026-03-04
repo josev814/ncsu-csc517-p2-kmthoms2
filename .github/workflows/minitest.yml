@@ -1,0 +1,85 @@
+# GitHub Actions workflow to run MiniTest and collect SimpleCov coverage results
+# for all files in the app/ directory.
+#
+# Triggers: every push and pull request targeting the main branch.
+
+name: MiniTest with SimpleCov
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    name: Run MiniTest & SimpleCov
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read   # Only read access is needed to check out the repository
+
+    # PostgreSQL service container required by the Rails app
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: csc_ece_517_spring_2026_program_2_1_test
+        ports:
+          - 5432:5432
+        # Wait until PostgreSQL is ready to accept connections
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Point Rails at the service container created above
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/csc_ece_517_spring_2026_program_2_1_test
+      RAILS_ENV: test
+
+    steps:
+      # 1. Check out the repository source code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Set up the Ruby version specified in .ruby-version
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: .ruby-version
+          bundler-cache: true   # runs `bundle install` and caches the result
+
+      # 3. Create and migrate the test database
+      - name: Set up the test database
+        run: |
+          bin/rails db:create
+          bin/rails db:migrate
+
+      # 4. Run MiniTest; SimpleCov starts automatically via test/test_helper.rb.
+      #    The step fails (non-zero exit) if any test fails.
+      - name: Run MiniTest
+        run: bin/rails test
+
+      # 5. Print the SimpleCov summary to the workflow log so coverage percentages
+      #    for every file in app/ are visible directly in the Actions output.
+      - name: Print SimpleCov summary
+        if: always()   # run even when tests fail so partial coverage is still reported
+        run: |
+          if [ -f coverage/.last_run.json ]; then
+            echo "=== SimpleCov Coverage Summary ==="
+            cat coverage/.last_run.json
+          else
+            echo "No SimpleCov output found."
+          fi
+
+      # 6. Upload the full SimpleCov HTML report as a downloadable workflow artifact
+      - name: Upload SimpleCov coverage report
+        if: always()   # upload even when tests fail for diagnosis
+        uses: actions/upload-artifact@v4
+        with:
+          name: simplecov-coverage-report
+          path: coverage/
+          retention-days: 30
