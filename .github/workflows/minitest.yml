@@ -1,29 +1,45 @@
-name: Ruby
+name: minitest
 
 on:
   push:
     branches:
-      - copilot/create-github-workflow-for-minitest
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        ports:
+          - 5432:5432
+        options:
+          --health-interval=10s --health-timeout=5s --health-retries=5
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
 
-      - name: Setup Ruby
+      - name: Set up Ruby
         uses: ruby/setup-ruby@v1
-
-      - name: Configure Bundler
-        run: | 
-          bundle config set frozen false
+        with:
+          ruby-version: '2.7'
 
       - name: Install dependencies
-        run: | 
+        run: |
           bundle install
 
+      - name: Create and migrate the database
+        run: |
+          bundle exec rake db:create db:migrate RAILS_ENV=test
+
       - name: Run tests
-        run: | 
+        run: |
           bundle exec rake test
