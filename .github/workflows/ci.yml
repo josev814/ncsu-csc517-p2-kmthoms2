@@ -19,8 +19,6 @@ jobs:
       with:
         ruby-version: '2.6'
         bundler-cache: true
-        # Ensure we allow unfrozen gems
-        bundle config set frozen false
      - name: Install dependencies
       run: bundle install
 
