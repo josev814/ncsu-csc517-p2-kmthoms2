@@ -16,21 +16,24 @@ jobs:
         image: postgres:16
         ports:
           - 5432:5432
-        options:
-          --health-interval=10s --health-timeout=5s --health-retries=5
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: csc_ece_517_spring_2026_program_2_1_test
+        options: >-
+          --health-cmd="pg_isready -U postgres -d csc_ece_517_spring_2026_program_2_1_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '2.7'
+          ruby-version: '3.4.8'
 
       - name: Install dependencies
         run: |
