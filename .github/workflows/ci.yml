@@ -1,2 +1,0 @@
-      - name: Set Bundler frozen
-        run: bundle config set frozen false

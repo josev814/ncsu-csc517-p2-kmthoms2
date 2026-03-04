@@ -1,0 +1,175 @@
+name: minitest
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    services:
+      postgres:
+        image: postgres:16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: csc_ece_517_spring_2026_program_2_1_test
+        options: >-
+          --health-cmd="pg_isready -U postgres -d csc_ece_517_spring_2026_program_2_1_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4.8'
+
+      - name: Install dependencies
+        run: |
+          # Ensure we allow unfrozen gems
+          bundle config set frozen false
+          bundle install
+
+      - name: Create and migrate the database
+        run: |
+          RAILS_ENV=test bundle exec rails db:create db:migrate db:seed 
+
+      - name: Run tests
+        run: |
+          bundle exec rails test
+
+      - name: Extract app coverage details
+        if: always()
+        id: coverage
+        run: |
+          ruby <<'RUBY'
+          require "json"
+
+          resultset_file = "coverage/.resultset.json"
+          app_files = []
+
+          if File.exist?(resultset_file)
+            data = JSON.parse(File.read(resultset_file))
+            result = data.values.first || {}
+            coverage_map = result["coverage"] || {}
+
+            coverage_map.each do |path, metrics|
+              next unless path.include?("/app/") || path.start_with?("app/")
+
+              relative_path = path.include?("/app/") ? path.sub(%r{^.*?/app/}, "app/") : path
+              lines = metrics["lines"] || []
+              relevant = lines.compact.size
+              covered = lines.compact.count { |hits| hits.to_i.positive? }
+              percent = relevant.zero? ? 100.0 : (covered * 100.0 / relevant)
+
+              app_files << {
+                path: relative_path,
+                relevant: relevant,
+                covered: covered,
+                percent: percent
+              }
+            end
+          end
+
+          app_files.sort_by! { |entry| entry[:path] }
+          total_relevant = app_files.sum { |entry| entry[:relevant] }
+          total_covered = app_files.sum { |entry| entry[:covered] }
+          app_coverage = if app_files.empty?
+            "unavailable"
+          elsif total_relevant.zero?
+            "100.00"
+          else
+            format("%.2f", total_covered * 100.0 / total_relevant)
+          end
+
+          markdown = if app_files.empty?
+            "No app/* coverage data found."
+          else
+            header = "| File | Coverage | Covered/Relevant |\n|---|---:|---:|"
+            rows = app_files.map do |entry|
+              "| #{entry[:path]} | #{format('%.2f', entry[:percent])}% | #{entry[:covered]}/#{entry[:relevant]} |"
+            end
+            ([header] + rows).join("\n")
+          end
+
+          File.open(ENV.fetch("GITHUB_OUTPUT"), "a") do |f|
+            f.puts("app_coverage=#{app_coverage}")
+            f.puts("app_file_count=#{app_files.size}")
+            f.puts("app_files_markdown<<EOF")
+            f.puts(markdown)
+            f.puts("EOF")
+          end
+          RUBY
+
+      - name: Add coverage to run summary
+        if: always()
+        run: |
+          echo "## Test Coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo "Line coverage for all app/* files: **${{ steps.coverage.outputs.app_coverage }}%**" >> "$GITHUB_STEP_SUMMARY"
+          echo "Files included: **${{ steps.coverage.outputs.app_file_count }}**" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Per-file coverage (app/*)" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.coverage.outputs.app_files_markdown }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          if-no-files-found: warn
+
+      - name: Post coverage comment on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          APP_COVERAGE_VALUE: ${{ steps.coverage.outputs.app_coverage }}
+          APP_FILE_COUNT: ${{ steps.coverage.outputs.app_file_count }}
+          APP_FILES_MARKDOWN: ${{ steps.coverage.outputs.app_files_markdown }}
+        with:
+          script: |
+            const marker = '<!-- coverage-comment -->';
+            const body = `${marker}\n### Test Coverage\nLine coverage for all app/* files: **${process.env.APP_COVERAGE_VALUE}%**\nFiles included: **${process.env.APP_FILE_COUNT}**\n\n${process.env.APP_FILES_MARKDOWN}`;
+            const issue_number = context.payload.pull_request.number;
+            const { owner, repo } = context.repo;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100
+            });
+
+            const existing = comments.find(
+              (comment) => comment.user.type === 'Bot' && comment.body && comment.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body
+              });
+            }
